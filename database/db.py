@@ -40,6 +40,28 @@ CREATE TABLE IF NOT EXISTS attempt_answers (
     chosen_option   INTEGER NOT NULL,
     is_correct      INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS group_sessions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id         INTEGER NOT NULL,
+    quiz_id         INTEGER NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+    started_by      INTEGER NOT NULL,
+    current_q_index INTEGER NOT NULL DEFAULT 0,
+    message_id      INTEGER,
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS group_answers (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER NOT NULL REFERENCES group_sessions(id) ON DELETE CASCADE,
+    question_id INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    username    TEXT,
+    is_correct  INTEGER NOT NULL DEFAULT 0,
+    answered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(session_id, question_id, user_id)
+);
 """
 
 
