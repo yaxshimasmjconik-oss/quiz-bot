@@ -217,7 +217,9 @@ async def get_stats() -> dict:
     async with get_db() as db:
         users = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
         quizzes = (await (await db.execute("SELECT COUNT(*) FROM quizzes")).fetchone())[0]
-        attempts = (await (await db.execute("SELECT COUNT(*) FROM attempts WHERE finished_at IS NOT NULL")).fetchone())[0]
+        attempts = (await (await db.execute(
+            "SELECT COUNT(*) FROM attempts WHERE finished_at IS NOT NULL"
+        )).fetchone())[0]
         return {"users": users, "quizzes": quizzes, "attempts": attempts}
 
 
@@ -231,7 +233,7 @@ async def get_all_user_ids() -> list[int]:
 # ── GURUH SESSIYALARI ──────────────────────────────────────
 
 async def create_group_session(
-    chat_id: int, quiz_id: int, started_by: int
+    chat_id: int, quiz_id: int, started_by: int, question_time: int = 10
 ) -> int:
     async with get_db() as db:
         await db.execute(
@@ -240,10 +242,10 @@ async def create_group_session(
         )
         cursor = await db.execute(
             """
-            INSERT INTO group_sessions (chat_id, quiz_id, started_by)
-            VALUES (?, ?, ?)
+            INSERT INTO group_sessions (chat_id, quiz_id, started_by, question_time)
+            VALUES (?, ?, ?, ?)
             """,
-            (chat_id, quiz_id, started_by),
+            (chat_id, quiz_id, started_by, question_time),
         )
         await db.commit()
         return cursor.lastrowid
@@ -262,7 +264,9 @@ async def get_active_session(chat_id: int) -> Optional[aiosqlite.Row]:
         return await cursor.fetchone()
 
 
-async def update_session_question(session_id: int, q_index: int, message_id: int) -> None:
+async def update_session_question(
+    session_id: int, q_index: int, message_id: int
+) -> None:
     async with get_db() as db:
         await db.execute(
             """
@@ -311,7 +315,7 @@ async def get_session_scores(session_id: int) -> list[aiosqlite.Row]:
     async with get_db() as db:
         cursor = await db.execute(
             """
-            SELECT username, COUNT(*) as total, SUM(is_correct) as score
+            SELECT username, user_id, COUNT(*) as total, SUM(is_correct) as score
             FROM group_answers
             WHERE session_id = ?
             GROUP BY user_id
@@ -322,7 +326,9 @@ async def get_session_scores(session_id: int) -> list[aiosqlite.Row]:
         return await cursor.fetchall()
 
 
-async def get_question_answerers(session_id: int, question_id: int) -> list[aiosqlite.Row]:
+async def get_question_answerers(
+    session_id: int, question_id: int
+) -> list[aiosqlite.Row]:
     async with get_db() as db:
         cursor = await db.execute(
             """
@@ -331,5 +337,40 @@ async def get_question_answerers(session_id: int, question_id: int) -> list[aios
             ORDER BY answered_at
             """,
             (session_id, question_id),
+        )
+        return await cursor.fetchall()
+
+
+# ── GLOBAL REYTING ─────────────────────────────────────────
+
+async def update_global_rating(
+    user_id: int, username: str, score: int
+) -> None:
+    async with get_db() as db:
+        await db.execute(
+            """
+            INSERT INTO global_ratings (user_id, username, total_score, total_games)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username = excluded.username,
+                total_score = total_score + excluded.total_score,
+                total_games = total_games + 1,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (user_id, username, score),
+        )
+        await db.commit()
+
+
+async def get_global_rating(limit: int = 10) -> list[aiosqlite.Row]:
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT username, total_score, total_games
+            FROM global_ratings
+            ORDER BY total_score DESC
+            LIMIT ?
+            """,
+            (limit,),
         )
         return await cursor.fetchall()
