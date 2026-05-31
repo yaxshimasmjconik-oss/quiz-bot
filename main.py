@@ -7,7 +7,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import BOT_TOKEN
 from database.db import init_db
-from handlers import admin, quiz, common, group
+from handlers import admin, quiz, common, group, admin_panel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,6 +26,7 @@ async def main() -> None:
     dp = Dispatcher(storage=MemoryStorage())
 
     dp.include_router(common.router)
+    dp.include_router(admin_panel.router)
     dp.include_router(admin.router)
     dp.include_router(quiz.router)
     dp.include_router(group.router)
