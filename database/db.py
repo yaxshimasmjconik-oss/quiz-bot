@@ -2,6 +2,14 @@ import aiosqlite
 from config import DB_PATH
 
 CREATE_TABLES_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    user_id     INTEGER PRIMARY KEY,
+    username    TEXT,
+    full_name   TEXT,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_seen   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS quizzes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     title       TEXT    NOT NULL,
