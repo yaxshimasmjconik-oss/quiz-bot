@@ -7,7 +7,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import BOT_TOKEN
 from database.db import init_db
-from handlers import admin, quiz, common
+from handlers import admin, quiz, common, group
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +28,7 @@ async def main() -> None:
     dp.include_router(common.router)
     dp.include_router(admin.router)
     dp.include_router(quiz.router)
+    dp.include_router(group.router)
 
     logger.info("Bot ishga tushmoqda...")
     await bot.delete_webhook(drop_pending_updates=True)
