@@ -14,6 +14,24 @@ async def create_quiz(title: str, created_by: int) -> int:
         return cursor.lastrowid
 
 
+async def get_my_quizzes(user_id: int) -> list[aiosqlite.Row]:
+    """Faqat o'zi yaratgan testlar."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT q.id, q.title, q.created_by, q.created_at,
+                   COUNT(DISTINCT qu.id) AS question_count
+            FROM quizzes q
+            LEFT JOIN questions qu ON qu.quiz_id = q.id
+            WHERE q.created_by = ?
+            GROUP BY q.id
+            ORDER BY q.created_at DESC
+            """,
+            (user_id,),
+        )
+        return await cursor.fetchall()
+
+
 async def get_all_quizzes() -> list[aiosqlite.Row]:
     async with get_db() as db:
         cursor = await db.execute(
