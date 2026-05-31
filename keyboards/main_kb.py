@@ -1,6 +1,5 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from utils.helpers import is_admin
 
 
 def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
@@ -16,8 +15,7 @@ def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
     )
     if is_admin:
         builder.row(
-            InlineKeyboardButton(text="📋 Barcha testlar", callback_data="list_quizzes"),
-            InlineKeyboardButton(text="🗑 Test o'chirish", callback_data="delete_quiz"),
+            InlineKeyboardButton(text="🔐 Admin panel", callback_data="admin_panel")
         )
     return builder.as_markup()
 
