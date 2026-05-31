@@ -1,5 +1,5 @@
 import random
-from aiogram import Router, F, Bot
+from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -41,16 +41,13 @@ async def _send_question(
     )
 
 
-# ── O'Z TESTLARINI KO'RISH ─────────────────────────────────
-
 @router.callback_query(F.data == "solve_quiz")
 async def cb_solve_quiz(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     quizzes = await queries.get_my_quizzes(callback.from_user.id)
     if not quizzes:
         await callback.message.edit_text(
-            "❗ Sizda hali test yo'q.\n"
-            "➕ Yangi test yarating!",
+            "❗ Sizda hali test yo'q.\n➕ Yangi test yarating!",
             reply_markup=back_to_menu_kb(),
         )
         await callback.answer()
@@ -79,8 +76,8 @@ async def cb_start_quiz(callback: CallbackQuery, state: FSMContext) -> None:
 
     question_data = [dict(q) for q in questions]
     random.shuffle(question_data)
-
     total = len(question_data)
+
     attempt_id = await queries.create_attempt(
         user_id=callback.from_user.id,
         quiz_id=quiz_id,
@@ -103,8 +100,6 @@ async def cb_start_quiz(callback: CallbackQuery, state: FSMContext) -> None:
     await _send_question(callback, attempt_id, question_data, 0)
     await callback.answer()
 
-
-# ── JAVOB BERISH ───────────────────────────────────────────
 
 @router.callback_query(SolveQuizSG.answering, F.data.startswith("answer_"))
 async def cb_answer(callback: CallbackQuery, state: FSMContext) -> None:
@@ -171,8 +166,6 @@ async def cb_answer(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("✅ To'g'ri!" if is_correct else "❌ Noto'g'ri!")
 
 
-# ── GURUHGA YUBORISH ───────────────────────────────────────
-
 @router.callback_query(F.data.startswith("share_quiz_"))
 async def cb_share_quiz(callback: CallbackQuery) -> None:
     quiz_id = int(callback.data.split("_")[2])
@@ -184,27 +177,18 @@ async def cb_share_quiz(callback: CallbackQuery) -> None:
     bot_info = await callback.bot.get_me()
     bot_username = bot_info.username
 
-    share_text = (
-        f"📝 <b>{quiz['title']}</b> testini ishlang!\n\n"
-        f"Botga o'ting va testni toping 👇"
-    )
-    share_url = f"https://t.me/{bot_username}?start=quiz_{quiz_id}"
-
     await callback.message.answer(
-        f"{share_text}\n\n"
-        f"🔗 Havola: {share_url}\n\n"
-        f"<i>Bu havolani guruhga yuboring — a'zolar testni ishlaydi!</i>",
+        f"📤 <b>{quiz['title']}</b> testini guruhga yuboring!\n\n"
+        f"Quyidagi tugmani bosing va guruhni tanlang:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
                 text="📤 Guruhga yuborish",
-                url=f"https://t.me/share/url?url={share_url}&text={quiz['title']} testini ishlang!"
+                url=f"https://t.me/share/url?url=https://t.me/{bot_username}?start=quiz_{quiz_id}&text={quiz['title']} testini ishlang! @{bot_username}"
             )
         ]])
     )
     await callback.answer()
 
-
-# ── NATIJALAR ──────────────────────────────────────────────
 
 @router.callback_query(F.data == "my_results")
 async def cb_my_results(callback: CallbackQuery) -> None:
