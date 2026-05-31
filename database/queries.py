@@ -180,6 +180,54 @@ async def get_user_attempts(user_id: int) -> list[aiosqlite.Row]:
         return await cursor.fetchall()
 
 
+# ── FOYDALANUVCHILAR ───────────────────────────────────────
+
+async def register_user(user_id: int, username: str, full_name: str) -> None:
+    async with get_db() as db:
+        await db.execute(
+            """
+            INSERT INTO users (user_id, username, full_name)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username = excluded.username,
+                full_name = excluded.full_name,
+                last_seen = CURRENT_TIMESTAMP
+            """,
+            (user_id, username, full_name),
+        )
+        await db.commit()
+
+
+async def get_all_users() -> list[aiosqlite.Row]:
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT * FROM users ORDER BY created_at DESC"
+        )
+        return await cursor.fetchall()
+
+
+async def get_users_count() -> int:
+    async with get_db() as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM users")
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def get_stats() -> dict:
+    async with get_db() as db:
+        users = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
+        quizzes = (await (await db.execute("SELECT COUNT(*) FROM quizzes")).fetchone())[0]
+        attempts = (await (await db.execute("SELECT COUNT(*) FROM attempts WHERE finished_at IS NOT NULL")).fetchone())[0]
+        return {"users": users, "quizzes": quizzes, "attempts": attempts}
+
+
+async def get_all_user_ids() -> list[int]:
+    async with get_db() as db:
+        cursor = await db.execute("SELECT user_id FROM users")
+        rows = await cursor.fetchall()
+        return [r[0] for r in rows]
+
+
 # ── GURUH SESSIYALARI ──────────────────────────────────────
 
 async def create_group_session(
@@ -243,7 +291,6 @@ async def save_group_answer(
     username: str,
     is_correct: bool,
 ) -> bool:
-    """Javobni saqlaydi. False qaytarsa — allaqachon javob bergan."""
     async with get_db() as db:
         try:
             await db.execute(
@@ -261,7 +308,6 @@ async def save_group_answer(
 
 
 async def get_session_scores(session_id: int) -> list[aiosqlite.Row]:
-    """Sessiya natijalarini ballga qarab tartiblaydi."""
     async with get_db() as db:
         cursor = await db.execute(
             """
@@ -277,7 +323,6 @@ async def get_session_scores(session_id: int) -> list[aiosqlite.Row]:
 
 
 async def get_question_answerers(session_id: int, question_id: int) -> list[aiosqlite.Row]:
-    """Savolga javob berganlar ro'yxati."""
     async with get_db() as db:
         cursor = await db.execute(
             """
