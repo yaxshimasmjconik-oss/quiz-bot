@@ -1,16 +1,8 @@
-"""
-Guruh rejimi:
-- Foydalanuvchi guruhga test yuboradi
-- Bot savollarni birma-bir chiqaradi (10 sekund)
-- Hamma javob beradi
-- Oxirida reyting chiqadi
-"""
 import asyncio
 import random
-from aiogram import Router, F, Bot
+from aiogram import Router, F
 from aiogram.types import (
-    CallbackQuery, Message,
-    InlineKeyboardMarkup, InlineKeyboardButton
+    CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 )
 
 from database import queries
@@ -18,10 +10,20 @@ from utils.helpers import score_to_percent, result_emoji
 
 router = Router()
 
-QUESTION_TIME = 10  # sekund
+
+def time_select_kb(quiz_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⚡ 10 sekund", callback_data=f"gtime_{quiz_id}_10"),
+            InlineKeyboardButton(text="⏱ 20 sekund", callback_data=f"gtime_{quiz_id}_20"),
+            InlineKeyboardButton(text="🐢 30 sekund", callback_data=f"gtime_{quiz_id}_30"),
+        ]
+    ])
 
 
-def group_answer_kb(options: list, session_id: int, question_id: int) -> InlineKeyboardMarkup:
+def group_answer_kb(
+    options: list, session_id: int, question_id: int
+) -> InlineKeyboardMarkup:
     buttons = []
     for i, opt in enumerate(options):
         buttons.append([InlineKeyboardButton(
@@ -32,16 +34,16 @@ def group_answer_kb(options: list, session_id: int, question_id: int) -> InlineK
 
 
 async def run_group_quiz(
-    bot: Bot,
+    bot,
     chat_id: int,
     session_id: int,
     quiz_id: int,
     questions: list,
+    question_time: int,
 ) -> None:
-    """Guruh testini boshqaruvchi asosiy funksiya."""
+    session_scores: dict[int, dict] = {}
 
     for q_index, question in enumerate(questions):
-        # Sessiya hali faolmi tekshirish
         session = await queries.get_active_session(chat_id)
         if not session or session["id"] != session_id:
             return
@@ -60,7 +62,7 @@ async def run_group_quiz(
             f"❓ <b>Savol {q_index + 1}/{total}</b>\n\n"
             f"{question['text']}\n\n"
             f"{options_text}\n\n"
-            f"⏱ <b>{QUESTION_TIME} sekund!</b>"
+            f"⏱ <b>{question_time} sekund!</b>"
         )
 
         msg = await bot.send_message(
@@ -71,8 +73,7 @@ async def run_group_quiz(
 
         await queries.update_session_question(session_id, q_index, msg.message_id)
 
-        # Vaqtni hisoblash — har sekund yangilanadi
-        for remaining in range(QUESTION_TIME - 1, 0, -1):
+        for remaining in range(question_time - 1, 0, -1):
             await asyncio.sleep(1)
             session = await queries.get_active_session(chat_id)
             if not session:
@@ -101,7 +102,6 @@ async def run_group_quiz(
 
         await asyncio.sleep(1)
 
-        # To'g'ri javobni ko'rsatish
         correct = next((o for o in options_list if o["is_correct"]), None)
         correct_text = correct["text"] if correct else "?"
         answerers = await queries.get_question_answerers(session_id, question_id)
@@ -124,13 +124,21 @@ async def run_group_quiz(
 
         await asyncio.sleep(2)
 
-    # Test tugadi — natijalar
+    # Test tugadi
     await queries.end_session(session_id)
     scores = await queries.get_session_scores(session_id)
 
     if not scores:
         await bot.send_message(chat_id, "🏁 Test tugadi! Hech kim javob bermadi.")
         return
+
+    # Global reytingni yangilash
+    for row in scores:
+        await queries.update_global_rating(
+            user_id=row["user_id"],
+            username=row["username"] or "Nomsiz",
+            score=row["score"] or 0,
+        )
 
     lines = ["🏆 <b>Test yakunlandi! Natijalar:</b>\n"]
     medals = ["🥇", "🥈", "🥉"]
@@ -142,26 +150,31 @@ async def run_group_quiz(
             f"{row['score']}/{row['total']} ({percent}%)"
         )
 
-    await bot.send_message(chat_id, "\n".join(lines))
+    await bot.send_message(
+        chat_id,
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="🏆 Umumiy reyting",
+                callback_data="global_rating"
+            )
+        ]])
+    )
 
 
-# ── GURUHGA YUBORISH CALLBACK ──────────────────────────────
+# ── VAQT TANLASH ───────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("gstart_"))
 async def cb_group_start(callback: CallbackQuery) -> None:
-    """Guruhda test boshlash."""
     quiz_id = int(callback.data.split("_")[1])
-    chat_id = callback.message.chat.id
 
-    # Faqat guruhda ishlaydi
     if callback.message.chat.type == "private":
         await callback.answer(
             "❗ Bu tugma faqat guruhda ishlaydi!", show_alert=True
         )
         return
 
-    # Allaqachon faol sessiya bormi
-    existing = await queries.get_active_session(chat_id)
+    existing = await queries.get_active_session(callback.message.chat.id)
     if existing:
         await callback.answer(
             "❗ Guruhda test allaqachon boshlangan!", show_alert=True
@@ -173,7 +186,33 @@ async def cb_group_start(callback: CallbackQuery) -> None:
         await callback.answer("Test topilmadi!", show_alert=True)
         return
 
+    await callback.message.answer(
+        f"⏱ <b>{quiz['title']}</b> — har savol uchun vaqtni tanlang:",
+        reply_markup=time_select_kb(quiz_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("gtime_"))
+async def cb_time_selected(callback: CallbackQuery) -> None:
+    parts = callback.data.split("_")
+    quiz_id = int(parts[1])
+    question_time = int(parts[2])
+
+    chat_id = callback.message.chat.id
+
+    if callback.message.chat.type == "private":
+        await callback.answer("❗ Faqat guruhda!", show_alert=True)
+        return
+
+    existing = await queries.get_active_session(chat_id)
+    if existing:
+        await callback.answer("❗ Test allaqachon boshlangan!", show_alert=True)
+        return
+
+    quiz = await queries.get_quiz(quiz_id)
     questions = await queries.get_questions(quiz_id)
+
     if not questions:
         await callback.answer("Savollar yo'q!", show_alert=True)
         return
@@ -185,6 +224,7 @@ async def cb_group_start(callback: CallbackQuery) -> None:
         chat_id=chat_id,
         quiz_id=quiz_id,
         started_by=callback.from_user.id,
+        question_time=question_time,
     )
 
     username = callback.from_user.first_name or "Foydalanuvchi"
@@ -192,7 +232,7 @@ async def cb_group_start(callback: CallbackQuery) -> None:
         f"🚀 <b>{quiz['title']}</b> testi boshlanmoqda!\n"
         f"▶️ Boshlagan: {username}\n"
         f"❓ Savollar: {len(question_data)} ta\n"
-        f"⏱ Har savol: {QUESTION_TIME} sekund\n\n"
+        f"⏱ Har savol: {question_time} sekund\n\n"
         f"Tayyor bo'ling! 3... 2... 1..."
     )
     await callback.answer()
@@ -204,6 +244,7 @@ async def cb_group_start(callback: CallbackQuery) -> None:
         session_id=session_id,
         quiz_id=quiz_id,
         questions=question_data,
+        question_time=question_time,
     )
 
 
@@ -211,7 +252,6 @@ async def cb_group_start(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("gans_"))
 async def cb_group_answer(callback: CallbackQuery) -> None:
-    """Guruhda javob berish."""
     parts = callback.data.split("_")
     session_id = int(parts[1])
     question_id = int(parts[2])
@@ -240,3 +280,27 @@ async def cb_group_answer(callback: CallbackQuery) -> None:
         await callback.answer("✅ To'g'ri javob!", show_alert=False)
     else:
         await callback.answer("❌ Noto'g'ri!", show_alert=False)
+
+
+# ── UMUMIY REYTING ─────────────────────────────────────────
+
+@router.callback_query(F.data == "global_rating")
+async def cb_global_rating(callback: CallbackQuery) -> None:
+    ratings = await queries.get_global_rating(limit=10)
+
+    if not ratings:
+        await callback.answer("Hali reyting yo'q!", show_alert=True)
+        return
+
+    medals = ["🥇", "🥈", "🥉"]
+    lines = ["🏆 <b>Umumiy reyting (Top 10):</b>\n"]
+    for i, r in enumerate(ratings):
+        medal = medals[i] if i < 3 else f"{i+1}."
+        lines.append(
+            f"{medal} <b>{r['username']}</b>\n"
+            f"   ⭐ {r['total_score']} ball | "
+            f"🎮 {r['total_games']} o'yin"
+        )
+
+    await callback.message.answer("\n".join(lines))
+    await callback.answer()
