@@ -3,7 +3,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
 def quiz_list_kb(quizzes: list) -> InlineKeyboardMarkup:
-    """Foydalanuvchi uchun quiz tanlash klaviaturasi."""
     builder = InlineKeyboardBuilder()
     for quiz in quizzes:
         label = f"📝 {quiz['title'][:40]} ({quiz['question_count']} savol)"
@@ -19,7 +18,6 @@ def quiz_list_kb(quizzes: list) -> InlineKeyboardMarkup:
 
 
 def answer_options_kb(options: list, question_id: int, attempt_id: int) -> InlineKeyboardMarkup:
-    """Javob variantlari klaviaturasi."""
     builder = InlineKeyboardBuilder()
     for i, opt in enumerate(options):
         builder.row(
@@ -31,11 +29,19 @@ def answer_options_kb(options: list, question_id: int, attempt_id: int) -> Inlin
     return builder.as_markup()
 
 
-def result_kb() -> InlineKeyboardMarkup:
-    """Natija ko'rsatilgandan keyin tugmalar."""
+def result_kb(quiz_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="📝 Boshqa test ishlash", callback_data="solve_quiz"),
-        InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="main_menu"),
+        InlineKeyboardButton(
+            text="🔄 Qayta ishlash",
+            callback_data=f"start_quiz_{quiz_id}"
+        ),
+        InlineKeyboardButton(
+            text="📤 Guruhga yuborish",
+            callback_data=f"share_quiz_{quiz_id}"
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="main_menu")
     )
     return builder.as_markup()
