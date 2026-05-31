@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS group_sessions (
     current_q_index INTEGER NOT NULL DEFAULT 0,
     message_id      INTEGER,
     is_active       INTEGER NOT NULL DEFAULT 1,
+    question_time   INTEGER NOT NULL DEFAULT 10,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -69,6 +70,15 @@ CREATE TABLE IF NOT EXISTS group_answers (
     is_correct  INTEGER NOT NULL DEFAULT 0,
     answered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(session_id, question_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS global_ratings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    username    TEXT,
+    total_score INTEGER NOT NULL DEFAULT 0,
+    total_games INTEGER NOT NULL DEFAULT 0,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 """
 
