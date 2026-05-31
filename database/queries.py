@@ -15,7 +15,6 @@ async def create_quiz(title: str, created_by: int) -> int:
 
 
 async def get_my_quizzes(user_id: int) -> list[aiosqlite.Row]:
-    """Faqat o'zi yaratgan testlar."""
     async with get_db() as db:
         cursor = await db.execute(
             """
@@ -177,5 +176,115 @@ async def get_user_attempts(user_id: int) -> list[aiosqlite.Row]:
             ORDER BY a.finished_at DESC
             """,
             (user_id,),
+        )
+        return await cursor.fetchall()
+
+
+# ── GURUH SESSIYALARI ──────────────────────────────────────
+
+async def create_group_session(
+    chat_id: int, quiz_id: int, started_by: int
+) -> int:
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE group_sessions SET is_active = 0 WHERE chat_id = ?",
+            (chat_id,),
+        )
+        cursor = await db.execute(
+            """
+            INSERT INTO group_sessions (chat_id, quiz_id, started_by)
+            VALUES (?, ?, ?)
+            """,
+            (chat_id, quiz_id, started_by),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def get_active_session(chat_id: int) -> Optional[aiosqlite.Row]:
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT * FROM group_sessions
+            WHERE chat_id = ? AND is_active = 1
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (chat_id,),
+        )
+        return await cursor.fetchone()
+
+
+async def update_session_question(session_id: int, q_index: int, message_id: int) -> None:
+    async with get_db() as db:
+        await db.execute(
+            """
+            UPDATE group_sessions
+            SET current_q_index = ?, message_id = ?
+            WHERE id = ?
+            """,
+            (q_index, message_id, session_id),
+        )
+        await db.commit()
+
+
+async def end_session(session_id: int) -> None:
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE group_sessions SET is_active = 0 WHERE id = ?",
+            (session_id,),
+        )
+        await db.commit()
+
+
+async def save_group_answer(
+    session_id: int,
+    question_id: int,
+    user_id: int,
+    username: str,
+    is_correct: bool,
+) -> bool:
+    """Javobni saqlaydi. False qaytarsa — allaqachon javob bergan."""
+    async with get_db() as db:
+        try:
+            await db.execute(
+                """
+                INSERT INTO group_answers
+                (session_id, question_id, user_id, username, is_correct)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (session_id, question_id, user_id, username, int(is_correct)),
+            )
+            await db.commit()
+            return True
+        except Exception:
+            return False
+
+
+async def get_session_scores(session_id: int) -> list[aiosqlite.Row]:
+    """Sessiya natijalarini ballga qarab tartiblaydi."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT username, COUNT(*) as total, SUM(is_correct) as score
+            FROM group_answers
+            WHERE session_id = ?
+            GROUP BY user_id
+            ORDER BY score DESC
+            """,
+            (session_id,),
+        )
+        return await cursor.fetchall()
+
+
+async def get_question_answerers(session_id: int, question_id: int) -> list[aiosqlite.Row]:
+    """Savolga javob berganlar ro'yxati."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT username, is_correct FROM group_answers
+            WHERE session_id = ? AND question_id = ?
+            ORDER BY answered_at
+            """,
+            (session_id, question_id),
         )
         return await cursor.fetchall()
