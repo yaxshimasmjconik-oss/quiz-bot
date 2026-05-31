@@ -1,7 +1,7 @@
 import random
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from database import queries
 from keyboards.quiz_kb import quiz_list_kb, answer_options_kb, result_kb
@@ -23,7 +23,6 @@ async def _send_question(
     options = await queries.get_options(question_id)
     total = len(questions)
 
-    # Variantlarni aralashtirish
     options_list = [dict(o) for o in options]
     random.shuffle(options_list)
 
@@ -42,15 +41,16 @@ async def _send_question(
     )
 
 
-# ── QUIZ TANLASH ───────────────────────────────────────────
+# ── O'Z TESTLARINI KO'RISH ─────────────────────────────────
 
 @router.callback_query(F.data == "solve_quiz")
 async def cb_solve_quiz(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    quizzes = await queries.get_all_quizzes()
+    quizzes = await queries.get_my_quizzes(callback.from_user.id)
     if not quizzes:
         await callback.message.edit_text(
-            "❗ Hozircha hech qanday test mavjud emas.",
+            "❗ Sizda hali test yo'q.\n"
+            "➕ Yangi test yarating!",
             reply_markup=back_to_menu_kb(),
         )
         await callback.answer()
@@ -58,7 +58,7 @@ async def cb_solve_quiz(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.set_state(SolveQuizSG.choosing_quiz)
     await callback.message.edit_text(
-        "📝 <b>Test tanlang:</b>",
+        "📝 <b>Qaysi testni ishlaysiz?</b>",
         reply_markup=quiz_list_kb([dict(q) for q in quizzes]),
     )
     await callback.answer()
@@ -77,7 +77,6 @@ async def cb_start_quiz(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Bu testda savollar yo'q!", show_alert=True)
         return
 
-    # Savollarni aralashtirish
     question_data = [dict(q) for q in questions]
     random.shuffle(question_data)
 
@@ -166,10 +165,43 @@ async def cb_answer(callback: CallbackQuery, state: FSMContext) -> None:
             f"✅ To'g'ri: <b>{score}/{total}</b>\n"
             f"📊 Natija: <b>{percent}%</b>\n"
             f"{bar}",
-            reply_markup=result_kb(),
+            reply_markup=result_kb(data["quiz_id"]),
         )
 
     await callback.answer("✅ To'g'ri!" if is_correct else "❌ Noto'g'ri!")
+
+
+# ── GURUHGA YUBORISH ───────────────────────────────────────
+
+@router.callback_query(F.data.startswith("share_quiz_"))
+async def cb_share_quiz(callback: CallbackQuery) -> None:
+    quiz_id = int(callback.data.split("_")[2])
+    quiz = await queries.get_quiz(quiz_id)
+    if not quiz:
+        await callback.answer("Test topilmadi!", show_alert=True)
+        return
+
+    bot_info = await callback.bot.get_me()
+    bot_username = bot_info.username
+
+    share_text = (
+        f"📝 <b>{quiz['title']}</b> testini ishlang!\n\n"
+        f"Botga o'ting va testni toping 👇"
+    )
+    share_url = f"https://t.me/{bot_username}?start=quiz_{quiz_id}"
+
+    await callback.message.answer(
+        f"{share_text}\n\n"
+        f"🔗 Havola: {share_url}\n\n"
+        f"<i>Bu havolani guruhga yuboring — a'zolar testni ishlaydi!</i>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="📤 Guruhga yuborish",
+                url=f"https://t.me/share/url?url={share_url}&text={quiz['title']} testini ishlang!"
+            )
+        ]])
+    )
+    await callback.answer()
 
 
 # ── NATIJALAR ──────────────────────────────────────────────
