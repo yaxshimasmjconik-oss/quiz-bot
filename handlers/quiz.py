@@ -95,7 +95,7 @@ async def cb_start_quiz(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_text(
         f"🚀 <b>{quiz['title']}</b>\n"
         f"Jami: {total} ta savol\n\n"
-        f"Savollar aralashtirildi! Boshlaylik 👇"
+        f"Boshlaylik! 👇"
     )
     await _send_question(callback, attempt_id, question_data, 0)
     await callback.answer()
@@ -127,11 +127,16 @@ async def cb_answer(callback: CallbackQuery, state: FSMContext) -> None:
 
     if is_correct:
         feedback = f"✅ <b>To'g'ri!</b>\n<i>{chosen_text}</i>"
+        await callback.answer("✅ To'g'ri!", show_alert=True)
     else:
         feedback = (
             f"❌ <b>Noto'g'ri!</b>\n"
             f"Siz: <i>{chosen_text}</i>\n"
-            f"To'g'ri: <i>{correct_text}</i>"
+            f"To'g'ri javob: <i>{correct_text}</i>"
+        )
+        await callback.answer(
+            f"❌ Noto'g'ri!\nTo'g'ri: {correct_text}",
+            show_alert=True
         )
 
     next_index = current_index + 1
@@ -163,8 +168,6 @@ async def cb_answer(callback: CallbackQuery, state: FSMContext) -> None:
             reply_markup=result_kb(data["quiz_id"]),
         )
 
-    await callback.answer("✅ To'g'ri!" if is_correct else "❌ Noto'g'ri!")
-
 
 @router.callback_query(F.data.startswith("share_quiz_"))
 async def cb_share_quiz(callback: CallbackQuery) -> None:
@@ -179,13 +182,21 @@ async def cb_share_quiz(callback: CallbackQuery) -> None:
 
     await callback.message.answer(
         f"📤 <b>{quiz['title']}</b> testini guruhga yuboring!\n\n"
-        f"Quyidagi tugmani bosing va guruhni tanlang:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(
-                text="📤 Guruhga yuborish",
-                url=f"https://t.me/share/url?url=https://t.me/{bot_username}?start=quiz_{quiz_id}&text={quiz['title']} testini ishlang! @{bot_username}"
-            )
-        ]])
+        f"Quyidagi xabarni guruhingizga forward qiling 👇",
+    )
+
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=(
+            f"📝 <b>{quiz['title']}</b>\n\n"
+            f"Testni boshlash uchun quyidagi tugmani bosing!"
+        ),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="▶️ Guruhda testni boshlash",
+                callback_data=f"gstart_{quiz_id}",
+            )]
+        ])
     )
     await callback.answer()
 
