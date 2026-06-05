@@ -6,7 +6,7 @@ from aiogram.types import (
 )
 
 from database import queries
-from utils.helpers import score_to_percent, result_emoji
+from utils.helpers import score_to_percent, result_emoji, question_card
 
 router = Router()
 
@@ -14,9 +14,9 @@ router = Router()
 def time_select_kb(quiz_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="⚡ 10 sekund", callback_data=f"gtime_{quiz_id}_10"),
-            InlineKeyboardButton(text="⏱ 20 sekund", callback_data=f"gtime_{quiz_id}_20"),
-            InlineKeyboardButton(text="🐢 30 sekund", callback_data=f"gtime_{quiz_id}_30"),
+            InlineKeyboardButton(text="⚡ 10 sek", callback_data=f"gtime_{quiz_id}_10"),
+            InlineKeyboardButton(text="⏱ 20 sek", callback_data=f"gtime_{quiz_id}_20"),
+            InlineKeyboardButton(text="🐢 30 sek", callback_data=f"gtime_{quiz_id}_30"),
         ]
     ])
 
@@ -41,8 +41,6 @@ async def run_group_quiz(
     questions: list,
     question_time: int,
 ) -> None:
-    session_scores: dict[int, dict] = {}
-
     for q_index, question in enumerate(questions):
         session = await queries.get_active_session(chat_id)
         if not session or session["id"] != session_id:
@@ -52,22 +50,11 @@ async def run_group_quiz(
         options = await queries.get_options(question_id)
         options_list = [dict(o) for o in options]
         random.shuffle(options_list)
-
         total = len(questions)
-        options_text = "\n".join(
-            f"  {chr(65+i)}. {o['text']}" for i, o in enumerate(options_list)
-        )
-
-        text = (
-            f"❓ <b>Savol {q_index + 1}/{total}</b>\n\n"
-            f"{question['text']}\n\n"
-            f"{options_text}\n\n"
-            f"⏱ <b>{question_time} sekund!</b>"
-        )
 
         msg = await bot.send_message(
             chat_id=chat_id,
-            text=text,
+            text=question_card(q_index, total, question["text"], options_list, question_time),
             reply_markup=group_answer_kb(options_list, session_id, question_id),
         )
 
@@ -78,22 +65,23 @@ async def run_group_quiz(
             session = await queries.get_active_session(chat_id)
             if not session:
                 return
-            try:
-                answerers = await queries.get_question_answerers(session_id, question_id)
-                answered_names = ", ".join(
-                    f"{'✅' if a['is_correct'] else '❌'} {a['username']}"
-                    for a in answerers
-                ) if answerers else "Hali hech kim javob bermadi"
 
+            answerers = await queries.get_question_answerers(session_id, question_id)
+            if answerers:
+                answered_text = "\n".join(
+                    f"  {'✅' if a['is_correct'] else '❌'} {a['username']}"
+                    for a in answerers
+                )
+            else:
+                answered_text = "  👀 Hali hech kim javob bermadi"
+
+            try:
                 await bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=msg.message_id,
                     text=(
-                        f"❓ <b>Savol {q_index + 1}/{total}</b>\n\n"
-                        f"{question['text']}\n\n"
-                        f"{options_text}\n\n"
-                        f"⏱ <b>{remaining} sekund qoldi</b>\n\n"
-                        f"👥 {answered_names}"
+                        question_card(q_index, total, question["text"], options_list, remaining)
+                        + f"\n\n👥 <b>Javob berganlar:</b>\n{answered_text}"
                     ),
                     reply_markup=group_answer_kb(options_list, session_id, question_id),
                 )
@@ -102,21 +90,29 @@ async def run_group_quiz(
 
         await asyncio.sleep(1)
 
+        # To'g'ri javobni ko'rsatish
         correct = next((o for o in options_list if o["is_correct"]), None)
         correct_text = correct["text"] if correct else "?"
         answerers = await queries.get_question_answerers(session_id, question_id)
+
+        correct_count = sum(1 for a in answerers if a["is_correct"])
+        wrong_count = sum(1 for a in answerers if not a["is_correct"])
+
         answered_names = "\n".join(
             f"  {'✅' if a['is_correct'] else '❌'} {a['username']}"
             for a in answerers
-        ) if answerers else "  Hech kim javob bermadi"
+        ) if answerers else "  😴 Hech kim javob bermadi"
 
         try:
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=msg.message_id,
                 text=(
-                    f"✅ <b>To'g'ri javob:</b> {correct_text}\n\n"
-                    f"<b>Javob berganlar:</b>\n{answered_names}"
+                    f"{'━' * 22}\n"
+                    f"✅ <b>To'g'ri javob: {correct_text}</b>\n"
+                    f"{'━' * 22}\n\n"
+                    f"✅ To'g'ri: {correct_count} | ❌ Noto'g'ri: {wrong_count}\n\n"
+                    f"<b>Natijalar:</b>\n{answered_names}"
                 ),
             )
         except Exception:
@@ -129,7 +125,10 @@ async def run_group_quiz(
     scores = await queries.get_session_scores(session_id)
 
     if not scores:
-        await bot.send_message(chat_id, "🏁 Test tugadi! Hech kim javob bermadi.")
+        await bot.send_message(
+            chat_id,
+            "🏁 <b>Test tugadi!</b>\n\n😴 Hech kim javob bermadi."
+        )
         return
 
     # Global reytingni yangilash
@@ -140,14 +139,19 @@ async def run_group_quiz(
             score=row["score"] or 0,
         )
 
-    lines = ["🏆 <b>Test yakunlandi! Natijalar:</b>\n"]
     medals = ["🥇", "🥈", "🥉"]
+    lines = [
+        f"{'━' * 22}\n"
+        f"🏆 <b>Test yakunlandi!</b>\n"
+        f"{'━' * 22}\n"
+    ]
     for i, row in enumerate(scores):
         medal = medals[i] if i < 3 else f"{i+1}."
         percent = score_to_percent(row["score"] or 0, row["total"] or 1)
+        emoji = result_emoji(percent)
         lines.append(
-            f"{medal} <b>{row['username']}</b> — "
-            f"{row['score']}/{row['total']} ({percent}%)"
+            f"{medal} {emoji} <b>{row['username']}</b>\n"
+            f"   ✅ {row['score']}/{row['total']} — {percent}%"
         )
 
     await bot.send_message(
@@ -187,7 +191,8 @@ async def cb_group_start(callback: CallbackQuery) -> None:
         return
 
     await callback.message.answer(
-        f"⏱ <b>{quiz['title']}</b> — har savol uchun vaqtni tanlang:",
+        f"⏱ <b>{quiz['title']}</b>\n\n"
+        f"Har bir savol uchun vaqtni tanlang:",
         reply_markup=time_select_kb(quiz_id),
     )
     await callback.answer()
@@ -198,7 +203,6 @@ async def cb_time_selected(callback: CallbackQuery) -> None:
     parts = callback.data.split("_")
     quiz_id = int(parts[1])
     question_time = int(parts[2])
-
     chat_id = callback.message.chat.id
 
     if callback.message.chat.type == "private":
@@ -228,12 +232,17 @@ async def cb_time_selected(callback: CallbackQuery) -> None:
     )
 
     username = callback.from_user.first_name or "Foydalanuvchi"
+    time_emoji = "⚡" if question_time == 10 else "⏱" if question_time == 20 else "🐢"
+
     await callback.message.answer(
-        f"🚀 <b>{quiz['title']}</b> testi boshlanmoqda!\n"
-        f"▶️ Boshlagan: {username}\n"
-        f"❓ Savollar: {len(question_data)} ta\n"
-        f"⏱ Har savol: {question_time} sekund\n\n"
-        f"Tayyor bo'ling! 3... 2... 1..."
+        f"{'━' * 22}\n"
+        f"🚀 <b>Test boshlanmoqda!</b>\n"
+        f"{'━' * 22}\n\n"
+        f"📝 <b>{quiz['title']}</b>\n"
+        f"▶️ Boshlagan: <b>{username}</b>\n"
+        f"❓ Savollar: <b>{len(question_data)} ta</b>\n"
+        f"{time_emoji} Har savol: <b>{question_time} sekund</b>\n\n"
+        f"⏳ 3... 2... 1... Boshlaylik!"
     )
     await callback.answer()
 
@@ -263,6 +272,7 @@ async def cb_group_answer(callback: CallbackQuery) -> None:
     options = await queries.get_options(question_id)
     correct = next((o for o in options if o["is_correct"]), None)
     is_correct = correct is not None and chosen_option_id == correct["id"]
+    correct_text = correct["text"] if correct else "?"
 
     saved = await queries.save_group_answer(
         session_id=session_id,
@@ -273,13 +283,16 @@ async def cb_group_answer(callback: CallbackQuery) -> None:
     )
 
     if not saved:
-        await callback.answer("❗ Siz allaqachon javob berdingiz!", show_alert=True)
+        await callback.answer("❗ Allaqachon javob berdingiz!", show_alert=True)
         return
 
     if is_correct:
-        await callback.answer("✅ To'g'ri javob!", show_alert=False)
+        await callback.answer("✅ To'g'ri javob! +1 ball", show_alert=True)
     else:
-        await callback.answer("❌ Noto'g'ri!", show_alert=False)
+        await callback.answer(
+            f"❌ Noto'g'ri!\n✅ To'g'ri: {correct_text}",
+            show_alert=True
+        )
 
 
 # ── UMUMIY REYTING ─────────────────────────────────────────
@@ -293,7 +306,11 @@ async def cb_global_rating(callback: CallbackQuery) -> None:
         return
 
     medals = ["🥇", "🥈", "🥉"]
-    lines = ["🏆 <b>Umumiy reyting (Top 10):</b>\n"]
+    lines = [
+        f"{'━' * 22}\n"
+        f"🏆 <b>Umumiy reyting (Top 10)</b>\n"
+        f"{'━' * 22}\n"
+    ]
     for i, r in enumerate(ratings):
         medal = medals[i] if i < 3 else f"{i+1}."
         lines.append(
