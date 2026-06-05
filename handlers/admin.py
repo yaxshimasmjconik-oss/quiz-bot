@@ -2,7 +2,8 @@ import aiosqlite
 from aiogram import Router, F
 from aiogram.filters import Filter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import config
 from database import queries
@@ -13,7 +14,7 @@ from keyboards.admin_kb import (
     confirm_delete_kb,
 )
 from keyboards.main_kb import back_to_menu_kb
-from states.admin_states import CreateQuizSG, DeleteQuizSG
+from states.admin_states import CreateQuizSG, DeleteQuizSG, EditQuizSG, CopyQuizSG
 from utils.helpers import is_admin, format_quiz_list
 
 router = Router()
@@ -25,7 +26,23 @@ class AdminFilter(Filter):
         return user is not None and is_admin(user.id)
 
 
-# ── QUIZ YARATISH (hammaga ochiq) ──────────────────────────
+# ── KATEGORIYA TANLASH KB ──────────────────────────────────
+
+async def category_kb() -> InlineKeyboardMarkup:
+    categories = await queries.get_categories()
+    builder = InlineKeyboardBuilder()
+    for cat in categories:
+        builder.row(InlineKeyboardButton(
+            text=f"{cat['emoji']} {cat['name']}",
+            callback_data=f"cat_{cat['id']}",
+        ))
+    builder.row(InlineKeyboardButton(
+        text="⏭ Kategoriyasiz", callback_data="cat_0"
+    ))
+    return builder.as_markup()
+
+
+# ── QUIZ YARATISH ──────────────────────────────────────────
 
 @router.callback_query(F.data == "create_quiz")
 async def cb_create_quiz(callback: CallbackQuery, state: FSMContext) -> None:
@@ -46,14 +63,34 @@ async def msg_quiz_title(message: Message, state: FSMContext) -> None:
     if not title:
         await message.answer("❗ Test nomini kiriting.")
         return
-    quiz_id = await queries.create_quiz(title=title, created_by=message.from_user.id)
+    await state.update_data(quiz_title=title)
+    await state.set_state(CreateQuizSG.waiting_category)
+    await message.answer(
+        f"✅ <b>Test nomi:</b> {title}\n\n"
+        f"📂 Kategoriyani tanlang:",
+        reply_markup=await category_kb(),
+    )
+
+
+@router.callback_query(CreateQuizSG.waiting_category, F.data.startswith("cat_"))
+async def cb_category_selected(callback: CallbackQuery, state: FSMContext) -> None:
+    category_id = int(callback.data.split("_")[1])
+    data = await state.get_data()
+    title = data["quiz_title"]
+
+    quiz_id = await queries.create_quiz(
+        title=title,
+        created_by=callback.from_user.id,
+        category_id=category_id if category_id > 0 else None,
+    )
     await state.update_data(quiz_id=quiz_id, question_index=0)
     await state.set_state(CreateQuizSG.waiting_question)
-    await message.answer(
+    await callback.message.edit_text(
         f"✅ <b>Test yaratildi:</b> {title}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📌 <b>1-savol matnini yuboring:</b>"
     )
+    await callback.answer()
 
 
 @router.message(CreateQuizSG.waiting_question)
@@ -188,7 +225,279 @@ async def cb_save_quiz(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("✅ Saqlandi!")
 
 
-# ── BARCHA TESTLAR (hammaga ochiq) ─────────────────────────
+# ── TESTNI NUSXALASH ───────────────────────────────────────
+
+@router.callback_query(F.data == "copy_quiz")
+async def cb_copy_quiz(callback: CallbackQuery, state: FSMContext) -> None:
+    quizzes = await queries.get_my_quizzes(callback.from_user.id)
+    if not quizzes:
+        await callback.answer("❗ Nusxalash uchun test yo'q!", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    for q in quizzes:
+        builder.row(InlineKeyboardButton(
+            text=f"📝 {q['title'][:35]}",
+            callback_data=f"copy_select_{q['id']}",
+        ))
+    builder.row(InlineKeyboardButton(
+        text="❌ Bekor qilish", callback_data="main_menu"
+    ))
+
+    await state.set_state(CopyQuizSG.choosing_quiz)
+    await callback.message.edit_text(
+        "📋 <b>Qaysi testni nusxalaysiz?</b>",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(CopyQuizSG.choosing_quiz, F.data.startswith("copy_select_"))
+async def cb_copy_select(callback: CallbackQuery, state: FSMContext) -> None:
+    quiz_id = int(callback.data.split("_")[2])
+    quiz = await queries.get_quiz(quiz_id)
+    await state.update_data(copy_quiz_id=quiz_id)
+    await state.set_state(CopyQuizSG.waiting_title)
+    await callback.message.edit_text(
+        f"📝 <b>{quiz['title'] if quiz else '?'}</b> testini nusxalaysiz.\n\n"
+        f"Yangi test nomini kiriting:"
+    )
+    await callback.answer()
+
+
+@router.message(CopyQuizSG.waiting_title)
+async def msg_copy_title(message: Message, state: FSMContext) -> None:
+    new_title = (message.text or "").strip()
+    if not new_title:
+        await message.answer("❗ Nom bo'sh bo'lmasligi kerak!")
+        return
+
+    data = await state.get_data()
+    quiz_id = data["copy_quiz_id"]
+
+    new_quiz_id = await queries.copy_quiz(
+        quiz_id=quiz_id,
+        new_title=new_title,
+        user_id=message.from_user.id,
+    )
+    await state.clear()
+
+    q_count = await queries.count_questions(new_quiz_id)
+    await message.answer(
+        f"✅ <b>Test nusxalandi!</b>\n\n"
+        f"📋 Nomi: <b>{new_title}</b>\n"
+        f"❓ Savollar: <b>{q_count} ta</b>",
+        reply_markup=back_to_menu_kb(),
+    )
+
+
+# ── TESTNI TAHRIRLASH ──────────────────────────────────────
+
+@router.callback_query(F.data == "edit_quiz")
+async def cb_edit_quiz(callback: CallbackQuery, state: FSMContext) -> None:
+    quizzes = await queries.get_my_quizzes(callback.from_user.id)
+    if not quizzes:
+        await callback.answer("❗ Tahrirlash uchun test yo'q!", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    for q in quizzes:
+        builder.row(InlineKeyboardButton(
+            text=f"✏️ {q['title'][:35]}",
+            callback_data=f"edit_select_{q['id']}",
+        ))
+    builder.row(InlineKeyboardButton(
+        text="❌ Bekor qilish", callback_data="main_menu"
+    ))
+
+    await state.set_state(EditQuizSG.choosing_quiz)
+    await callback.message.edit_text(
+        "✏️ <b>Qaysi testni tahrirlaysiz?</b>",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(EditQuizSG.choosing_quiz, F.data.startswith("edit_select_"))
+async def cb_edit_select(callback: CallbackQuery, state: FSMContext) -> None:
+    quiz_id = int(callback.data.split("_")[2])
+    quiz = await queries.get_quiz(quiz_id)
+    questions = await queries.get_questions(quiz_id)
+
+    await state.update_data(edit_quiz_id=quiz_id)
+    await state.set_state(EditQuizSG.choosing_action)
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text="✏️ Nom o'zgartirish",
+        callback_data=f"edit_title_{quiz_id}",
+    ))
+    for i, q in enumerate(questions):
+        builder.row(InlineKeyboardButton(
+            text=f"❓ {i+1}. {q['text'][:30]}",
+            callback_data=f"edit_q_{q['id']}",
+        ))
+    builder.row(InlineKeyboardButton(
+        text="❌ Bekor qilish", callback_data="main_menu"
+    ))
+
+    await callback.message.edit_text(
+        f"✏️ <b>{quiz['title'] if quiz else '?'}</b>\n\n"
+        f"Nima tahrirlaysiz?",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_title_"))
+async def cb_edit_title(callback: CallbackQuery, state: FSMContext) -> None:
+    quiz_id = int(callback.data.split("_")[2])
+    await state.update_data(edit_quiz_id=quiz_id)
+    await state.set_state(EditQuizSG.editing_title)
+    await callback.message.edit_text(
+        "✏️ Yangi test nomini kiriting:"
+    )
+    await callback.answer()
+
+
+@router.message(EditQuizSG.editing_title)
+async def msg_edit_title(message: Message, state: FSMContext) -> None:
+    new_title = (message.text or "").strip()
+    if not new_title:
+        await message.answer("❗ Nom bo'sh bo'lmasligi kerak!")
+        return
+
+    data = await state.get_data()
+    await queries.update_quiz_title(data["edit_quiz_id"], new_title)
+    await state.clear()
+    await message.answer(
+        f"✅ Test nomi yangilandi: <b>{new_title}</b>",
+        reply_markup=back_to_menu_kb(),
+    )
+
+
+@router.callback_query(F.data.startswith("edit_q_"))
+async def cb_edit_question(callback: CallbackQuery, state: FSMContext) -> None:
+    question_id = int(callback.data.split("_")[2])
+    options = await queries.get_options(question_id)
+
+    await state.update_data(edit_question_id=question_id)
+    await state.set_state(EditQuizSG.choosing_option)
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(
+        text="✏️ Savol matnini o'zgartirish",
+        callback_data=f"edit_qtext_{question_id}",
+    ))
+    for opt in options:
+        mark = "✅" if opt["is_correct"] else "⬜"
+        builder.row(InlineKeyboardButton(
+            text=f"{mark} {opt['text'][:35]}",
+            callback_data=f"edit_opt_{opt['id']}_{question_id}",
+        ))
+    builder.row(InlineKeyboardButton(
+        text="🔙 Orqaga", callback_data=f"edit_select_{(await state.get_data()).get('edit_quiz_id', 0)}"
+    ))
+
+    await callback.message.edit_text(
+        "✏️ <b>Nima o'zgartiraysiz?</b>\n\n"
+        "<i>✅ — to'g'ri javob</i>",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_qtext_"))
+async def cb_edit_qtext(callback: CallbackQuery, state: FSMContext) -> None:
+    question_id = int(callback.data.split("_")[2])
+    await state.update_data(edit_question_id=question_id)
+    await state.set_state(EditQuizSG.editing_question)
+    await callback.message.edit_text("✏️ Yangi savol matnini kiriting:")
+    await callback.answer()
+
+
+@router.message(EditQuizSG.editing_question)
+async def msg_edit_question(message: Message, state: FSMContext) -> None:
+    new_text = (message.text or "").strip()
+    if not new_text:
+        await message.answer("❗ Savol matni bo'sh bo'lmasligi kerak!")
+        return
+    data = await state.get_data()
+    await queries.update_question_text(data["edit_question_id"], new_text)
+    await state.clear()
+    await message.answer(
+        "✅ Savol matni yangilandi!",
+        reply_markup=back_to_menu_kb(),
+    )
+
+
+@router.callback_query(F.data.startswith("edit_opt_"))
+async def cb_edit_option(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = callback.data.split("_")
+    option_id = int(parts[2])
+    question_id = int(parts[3])
+
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="✏️ Matnini o'zgartirish",
+            callback_data=f"edit_opttext_{option_id}",
+        ),
+        InlineKeyboardButton(
+            text="✅ To'g'ri javob qilish",
+            callback_data=f"edit_setcorrect_{option_id}_{question_id}",
+        ),
+    )
+    builder.row(InlineKeyboardButton(
+        text="🔙 Orqaga", callback_data=f"edit_q_{question_id}"
+    ))
+
+    await callback.message.edit_text(
+        "✏️ <b>Variant uchun amal tanlang:</b>",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_opttext_"))
+async def cb_edit_opttext(callback: CallbackQuery, state: FSMContext) -> None:
+    option_id = int(callback.data.split("_")[2])
+    await state.update_data(edit_option_id=option_id)
+    await state.set_state(EditQuizSG.editing_option)
+    await callback.message.edit_text("✏️ Yangi variant matnini kiriting:")
+    await callback.answer()
+
+
+@router.message(EditQuizSG.editing_option)
+async def msg_edit_option(message: Message, state: FSMContext) -> None:
+    new_text = (message.text or "").strip()
+    if not new_text:
+        await message.answer("❗ Variant matni bo'sh bo'lmasligi kerak!")
+        return
+    data = await state.get_data()
+    await queries.update_option_text(data["edit_option_id"], new_text)
+    await state.clear()
+    await message.answer(
+        "✅ Variant matni yangilandi!",
+        reply_markup=back_to_menu_kb(),
+    )
+
+
+@router.callback_query(F.data.startswith("edit_setcorrect_"))
+async def cb_set_correct(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = callback.data.split("_")
+    option_id = int(parts[2])
+    question_id = int(parts[3])
+    await queries.set_correct_option(question_id, option_id)
+    await state.clear()
+    await callback.message.edit_text(
+        "✅ To'g'ri javob o'zgartirildi!",
+        reply_markup=back_to_menu_kb(),
+    )
+    await callback.answer("✅ Saqlandi!")
+
+
+# ── BARCHA TESTLAR ─────────────────────────────────────────
 
 @router.callback_query(F.data == "list_quizzes")
 async def cb_list_quizzes(callback: CallbackQuery) -> None:
@@ -198,7 +507,7 @@ async def cb_list_quizzes(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-# ── TEST O'CHIRISH (faqat admin) ───────────────────────────
+# ── TEST O'CHIRISH ─────────────────────────────────────────
 
 @router.callback_query(F.data == "delete_quiz")
 async def cb_delete_quiz(callback: CallbackQuery, state: FSMContext) -> None:
