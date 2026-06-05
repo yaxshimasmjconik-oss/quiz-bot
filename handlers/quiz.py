@@ -1,13 +1,17 @@
 import random
 from aiogram import Router, F
+from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 from database import queries
 from keyboards.quiz_kb import quiz_list_kb, answer_options_kb, result_kb
 from keyboards.main_kb import back_to_menu_kb
 from states.quiz_states import SolveQuizSG
-from utils.helpers import score_to_percent, result_emoji, progress_bar
+from utils.helpers import (
+    score_to_percent, result_emoji, progress_bar,
+    result_message, question_card, achievement_check
+)
 
 router = Router()
 
@@ -22,24 +26,83 @@ async def _send_question(
     question_id = question["id"]
     options = await queries.get_options(question_id)
     total = len(questions)
-
     options_list = [dict(o) for o in options]
     random.shuffle(options_list)
 
-    options_text = "\n".join(
-        f"  {chr(65 + i)}. {opt['text']}" for i, opt in enumerate(options_list)
-    )
-    header = (
-        f"❓ <b>Savol {q_index + 1}/{total}</b>\n\n"
-        f"{question['text']}\n\n"
-        f"{options_text}"
-    )
-
     await callback.message.edit_text(
-        header,
+        question_card(q_index, total, question["text"], options_list),
         reply_markup=answer_options_kb(options_list, question_id, attempt_id),
     )
 
+
+# ── DEEP LINK ──────────────────────────────────────────────
+
+@router.message(CommandStart(deep_link=True))
+async def cmd_start_deep(message: Message, state: FSMContext) -> None:
+    args = message.text.split()
+    if len(args) < 2:
+        return
+
+    param = args[1]
+    if not param.startswith("quiz_"):
+        return
+
+    try:
+        quiz_id = int(param.split("_")[1])
+    except (ValueError, IndexError):
+        return
+
+    quiz = await queries.get_quiz(quiz_id)
+    if not quiz:
+        await message.answer("❗ Test topilmadi!")
+        return
+
+    questions = await queries.get_questions(quiz_id)
+    if not questions:
+        await message.answer("❗ Bu testda savollar yo'q!")
+        return
+
+    await queries.register_user(
+        user_id=message.from_user.id,
+        username=message.from_user.username or "",
+        full_name=message.from_user.full_name or "",
+    )
+
+    question_data = [dict(q) for q in questions]
+    random.shuffle(question_data)
+    total = len(question_data)
+
+    attempt_id = await queries.create_attempt(
+        user_id=message.from_user.id,
+        quiz_id=quiz_id,
+        total=total,
+    )
+
+    await state.set_state(SolveQuizSG.answering)
+    await state.update_data(
+        attempt_id=attempt_id,
+        quiz_id=quiz_id,
+        questions=question_data,
+        current_index=0,
+    )
+
+    msg = await message.answer(
+        f"🚀 <b>{quiz['title']}</b>\n"
+        f"❓ Jami: {total} ta savol\n\n"
+        f"Boshlaylik! 👇"
+    )
+
+    class FakeCallback:
+        def __init__(self, m):
+            self.message = m
+            self.from_user = message.from_user
+            self.bot = message.bot
+        async def answer(self, *a, **kw): pass
+
+    await _send_question(FakeCallback(msg), attempt_id, question_data, 0)
+
+
+# ── QUIZ TANLASH ───────────────────────────────────────────
 
 @router.callback_query(F.data == "solve_quiz")
 async def cb_solve_quiz(callback: CallbackQuery, state: FSMContext) -> None:
@@ -47,7 +110,8 @@ async def cb_solve_quiz(callback: CallbackQuery, state: FSMContext) -> None:
     quizzes = await queries.get_my_quizzes(callback.from_user.id)
     if not quizzes:
         await callback.message.edit_text(
-            "❗ Sizda hali test yo'q.\n➕ Yangi test yarating!",
+            "📭 <b>Sizda hali test yo'q!</b>\n\n"
+            "➕ Yangi test yarating va ishlang!",
             reply_markup=back_to_menu_kb(),
         )
         await callback.answer()
@@ -55,7 +119,8 @@ async def cb_solve_quiz(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.set_state(SolveQuizSG.choosing_quiz)
     await callback.message.edit_text(
-        "📝 <b>Qaysi testni ishlaysiz?</b>",
+        "📝 <b>Qaysi testni ishlaysiz?</b>\n\n"
+        f"Jami: {len(quizzes)} ta test mavjud",
         reply_markup=quiz_list_kb([dict(q) for q in quizzes]),
     )
     await callback.answer()
@@ -94,12 +159,14 @@ async def cb_start_quiz(callback: CallbackQuery, state: FSMContext) -> None:
 
     await callback.message.edit_text(
         f"🚀 <b>{quiz['title']}</b>\n"
-        f"Jami: {total} ta savol\n\n"
+        f"❓ Jami: {total} ta savol\n\n"
         f"Boshlaylik! 👇"
     )
     await _send_question(callback, attempt_id, question_data, 0)
     await callback.answer()
 
+
+# ── JAVOB BERISH ───────────────────────────────────────────
 
 @router.callback_query(SolveQuizSG.answering, F.data.startswith("answer_"))
 async def cb_answer(callback: CallbackQuery, state: FSMContext) -> None:
@@ -126,17 +193,20 @@ async def cb_answer(callback: CallbackQuery, state: FSMContext) -> None:
     correct_text = correct_option["text"] if correct_option else "?"
 
     if is_correct:
-        feedback = f"✅ <b>To'g'ri!</b>\n<i>{chosen_text}</i>"
         await callback.answer("✅ To'g'ri!", show_alert=True)
-    else:
         feedback = (
-            f"❌ <b>Noto'g'ri!</b>\n"
-            f"Siz: <i>{chosen_text}</i>\n"
-            f"To'g'ri javob: <i>{correct_text}</i>"
+            f"✅ <b>To'g'ri javob!</b>\n\n"
+            f"📌 {chosen_text}"
         )
+    else:
         await callback.answer(
-            f"❌ Noto'g'ri!\nTo'g'ri: {correct_text}",
+            f"❌ Noto'g'ri!\nTo'g'ri javob: {correct_text}",
             show_alert=True
+        )
+        feedback = (
+            f"❌ <b>Noto'g'ri!</b>\n\n"
+            f"Siz: <i>{chosen_text}</i>\n"
+            f"✅ To'g'ri: <b>{correct_text}</b>"
         )
 
     next_index = current_index + 1
@@ -150,24 +220,25 @@ async def cb_answer(callback: CallbackQuery, state: FSMContext) -> None:
         result = await queries.get_attempt_result(attempt_id)
         score = result["score"] if result else 0
         total = result["total"] if result else len(questions)
-        percent = score_to_percent(score, total)
-        emoji = result_emoji(percent)
-        bar = progress_bar(score, total)
         quiz = await queries.get_quiz(data["quiz_id"])
         quiz_title = quiz["title"] if quiz else "Test"
 
+        user_attempts = await queries.get_user_attempts(callback.from_user.id)
+        total_games = len(user_attempts)
+        achievement = achievement_check(score, total, total_games)
+
+        result_text = result_message(score, total, quiz_title)
+        if achievement:
+            result_text += f"\n\n{achievement}"
+
         await state.clear()
         await callback.message.edit_text(
-            f"{feedback}\n\n"
-            f"{'━' * 20}\n"
-            f"{emoji} <b>Test yakunlandi!</b>\n\n"
-            f"📋 <b>{quiz_title}</b>\n"
-            f"✅ To'g'ri: <b>{score}/{total}</b>\n"
-            f"📊 Natija: <b>{percent}%</b>\n"
-            f"{bar}",
+            result_text,
             reply_markup=result_kb(data["quiz_id"]),
         )
 
+
+# ── GURUHGA YUBORISH ───────────────────────────────────────
 
 @router.callback_query(F.data.startswith("share_quiz_"))
 async def cb_share_quiz(callback: CallbackQuery) -> None:
@@ -179,27 +250,37 @@ async def cb_share_quiz(callback: CallbackQuery) -> None:
 
     bot_info = await callback.bot.get_me()
     bot_username = bot_info.username
+    deep_link = f"https://t.me/{bot_username}?start=quiz_{quiz_id}"
 
     await callback.message.answer(
-        f"📤 <b>{quiz['title']}</b> testini guruhga yuboring!\n\n"
-        f"Quyidagi xabarni guruhingizga forward qiling 👇",
+        f"📤 <b>{quiz['title']}</b> testini ulashing!\n\n"
+        f"1️⃣ Quyidagi xabarni guruhga forward qiling\n"
+        f"2️⃣ Yoki havolani yuboring:\n"
+        f"🔗 {deep_link}",
     )
 
     await callback.bot.send_message(
         chat_id=callback.from_user.id,
         text=(
             f"📝 <b>{quiz['title']}</b>\n\n"
-            f"Testni boshlash uchun quyidagi tugmani bosing!"
+            f"✅ Testni ishlash uchun tugmani bosing!\n"
+            f"👥 Guruhda birga ishlash uchun forward qiling!"
         ),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="▶️ Guruhda testni boshlash",
+                text="▶️ Testni boshlash",
+                url=deep_link,
+            )],
+            [InlineKeyboardButton(
+                text="👥 Guruhda boshlash",
                 callback_data=f"gstart_{quiz_id}",
             )]
         ])
     )
-    await callback.answer()
+    await callback.answer("✅ Ulashish uchun xabar yuborildi!")
 
+
+# ── NATIJALAR ──────────────────────────────────────────────
 
 @router.callback_query(F.data == "my_results")
 async def cb_my_results(callback: CallbackQuery) -> None:
@@ -208,15 +289,15 @@ async def cb_my_results(callback: CallbackQuery) -> None:
     if not attempts:
         await callback.message.edit_text(
             "📊 <b>Mening natijalarim</b>\n\n"
-            "Hali hech qanday test ishlamadingiz.\n"
-            "Boshlang! 🚀",
+            "📭 Hali hech qanday test ishlamadingiz.\n\n"
+            "📝 Testni boshlang!",
             reply_markup=back_to_menu_kb(),
         )
         await callback.answer()
         return
 
     lines = ["📊 <b>Mening natijalarim:</b>\n"]
-    for i, a in enumerate(attempts, 1):
+    for i, a in enumerate(attempts[:10], 1):
         percent = score_to_percent(a["score"], a["total"])
         emoji = result_emoji(percent)
         finished = (a["finished_at"] or "")[:16]
