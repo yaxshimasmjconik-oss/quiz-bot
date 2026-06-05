@@ -3,6 +3,7 @@ from aiogram import Router, F
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from database import queries
 from keyboards.quiz_kb import quiz_list_kb, answer_options_kb, result_kb
@@ -42,11 +43,9 @@ async def cmd_start_deep(message: Message, state: FSMContext) -> None:
     args = message.text.split()
     if len(args) < 2:
         return
-
     param = args[1]
     if not param.startswith("quiz_"):
         return
-
     try:
         quiz_id = int(param.split("_")[1])
     except (ValueError, IndexError):
@@ -102,6 +101,51 @@ async def cmd_start_deep(message: Message, state: FSMContext) -> None:
     await _send_question(FakeCallback(msg), attempt_id, question_data, 0)
 
 
+# ── KATEGORIYALAR ──────────────────────────────────────────
+
+@router.callback_query(F.data == "categories")
+async def cb_categories(callback: CallbackQuery) -> None:
+    categories = await queries.get_categories()
+    builder = InlineKeyboardBuilder()
+    for cat in categories:
+        builder.row(InlineKeyboardButton(
+            text=f"{cat['emoji']} {cat['name']}",
+            callback_data=f"cat_browse_{cat['id']}",
+        ))
+    builder.row(InlineKeyboardButton(
+        text="🏠 Bosh menyu", callback_data="main_menu"
+    ))
+    await callback.message.edit_text(
+        "📂 <b>Kategoriyalar</b>\n\nQaysi mavzuni ko'rmoqchisiz?",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cat_browse_"))
+async def cb_cat_browse(callback: CallbackQuery, state: FSMContext) -> None:
+    category_id = int(callback.data.split("_")[2])
+    quizzes = await queries.get_quizzes_by_category(category_id)
+    categories = await queries.get_categories()
+    cat = next((c for c in categories if c["id"] == category_id), None)
+    cat_name = f"{cat['emoji']} {cat['name']}" if cat else "Kategoriya"
+
+    if not quizzes:
+        await callback.message.edit_text(
+            f"{cat_name}\n\n❗ Bu kategoriyada testlar yo'q.",
+            reply_markup=back_to_menu_kb(),
+        )
+        await callback.answer()
+        return
+
+    await state.set_state(SolveQuizSG.choosing_quiz)
+    await callback.message.edit_text(
+        f"{cat_name}\n\n📝 <b>Testni tanlang:</b>",
+        reply_markup=quiz_list_kb([dict(q) for q in quizzes]),
+    )
+    await callback.answer()
+
+
 # ── QUIZ TANLASH ───────────────────────────────────────────
 
 @router.callback_query(F.data == "solve_quiz")
@@ -111,7 +155,7 @@ async def cb_solve_quiz(callback: CallbackQuery, state: FSMContext) -> None:
     if not quizzes:
         await callback.message.edit_text(
             "📭 <b>Sizda hali test yo'q!</b>\n\n"
-            "➕ Yangi test yarating va ishlang!",
+            "➕ Yangi test yarating!",
             reply_markup=back_to_menu_kb(),
         )
         await callback.answer()
@@ -119,7 +163,7 @@ async def cb_solve_quiz(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.set_state(SolveQuizSG.choosing_quiz)
     await callback.message.edit_text(
-        "📝 <b>Qaysi testni ishlaysiz?</b>\n\n"
+        f"📝 <b>Qaysi testni ishlaysiz?</b>\n\n"
         f"Jami: {len(quizzes)} ta test mavjud",
         reply_markup=quiz_list_kb([dict(q) for q in quizzes]),
     )
@@ -194,10 +238,7 @@ async def cb_answer(callback: CallbackQuery, state: FSMContext) -> None:
 
     if is_correct:
         await callback.answer("✅ To'g'ri!", show_alert=True)
-        feedback = (
-            f"✅ <b>To'g'ri javob!</b>\n\n"
-            f"📌 {chosen_text}"
-        )
+        feedback = f"✅ <b>To'g'ri javob!</b>\n\n📌 {chosen_text}"
     else:
         await callback.answer(
             f"❌ Noto'g'ri!\nTo'g'ri javob: {correct_text}",
@@ -238,6 +279,37 @@ async def cb_answer(callback: CallbackQuery, state: FSMContext) -> None:
         )
 
 
+# ── SAVOL STATISTIKASI ─────────────────────────────────────
+
+@router.callback_query(F.data.startswith("quiz_stats_"))
+async def cb_quiz_stats(callback: CallbackQuery) -> None:
+    quiz_id = int(callback.data.split("_")[2])
+    quiz = await queries.get_quiz(quiz_id)
+    stats = await queries.get_question_stats(quiz_id)
+
+    if not stats:
+        await callback.answer("Statistika yo'q!", show_alert=True)
+        return
+
+    lines = [f"📊 <b>{quiz['title'] if quiz else '?'} — Statistika</b>\n"]
+    for i, s in enumerate(stats, 1):
+        total = s["total_answers"] or 0
+        correct = s["correct_answers"] or 0
+        percent = round(correct / total * 100) if total else 0
+        bar_filled = round(percent / 10)
+        bar = "█" * bar_filled + "░" * (10 - bar_filled)
+        lines.append(
+            f"{i}. {s['question_text'][:40]}\n"
+            f"   [{bar}] {percent}% ({correct}/{total})\n"
+        )
+
+    await callback.message.answer(
+        "\n".join(lines),
+        reply_markup=back_to_menu_kb(),
+    )
+    await callback.answer()
+
+
 # ── GURUHGA YUBORISH ───────────────────────────────────────
 
 @router.callback_query(F.data.startswith("share_quiz_"))
@@ -254,11 +326,8 @@ async def cb_share_quiz(callback: CallbackQuery) -> None:
 
     await callback.message.answer(
         f"📤 <b>{quiz['title']}</b> testini ulashing!\n\n"
-        f"1️⃣ Quyidagi xabarni guruhga forward qiling\n"
-        f"2️⃣ Yoki havolani yuboring:\n"
-        f"🔗 {deep_link}",
+        f"🔗 Havola: {deep_link}",
     )
-
     await callback.bot.send_message(
         chat_id=callback.from_user.id,
         text=(
@@ -289,8 +358,7 @@ async def cb_my_results(callback: CallbackQuery) -> None:
     if not attempts:
         await callback.message.edit_text(
             "📊 <b>Mening natijalarim</b>\n\n"
-            "📭 Hali hech qanday test ishlamadingiz.\n\n"
-            "📝 Testni boshlang!",
+            "📭 Hali hech qanday test ishlamadingiz.",
             reply_markup=back_to_menu_kb(),
         )
         await callback.answer()
