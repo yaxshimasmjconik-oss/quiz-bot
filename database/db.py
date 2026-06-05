@@ -10,10 +10,17 @@ CREATE TABLE IF NOT EXISTS users (
     last_seen   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS categories (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL UNIQUE,
+    emoji       TEXT    NOT NULL DEFAULT '📝'
+);
+
 CREATE TABLE IF NOT EXISTS quizzes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     title       TEXT    NOT NULL,
     created_by  INTEGER NOT NULL,
+    category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -73,8 +80,7 @@ CREATE TABLE IF NOT EXISTS group_answers (
 );
 
 CREATE TABLE IF NOT EXISTS global_ratings (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL,
+    user_id     INTEGER PRIMARY KEY,
     username    TEXT,
     total_score INTEGER NOT NULL DEFAULT 0,
     total_games INTEGER NOT NULL DEFAULT 0,
@@ -82,10 +88,27 @@ CREATE TABLE IF NOT EXISTS global_ratings (
 );
 """
 
+DEFAULT_CATEGORIES = [
+    ("Fanlar", "🔬"),
+    ("Tarix", "📜"),
+    ("Matematika", "🔢"),
+    ("IT va Texnologiya", "💻"),
+    ("Sport", "⚽"),
+    ("Musiqa", "🎵"),
+    ("Geografiya", "🌍"),
+    ("Boshqa", "📝"),
+]
+
 
 async def init_db() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(CREATE_TABLES_SQL)
+        # Default kategoriyalarni qo'shish
+        for name, emoji in DEFAULT_CATEGORIES:
+            await db.execute(
+                "INSERT OR IGNORE INTO categories (name, emoji) VALUES (?, ?)",
+                (name, emoji),
+            )
         await db.commit()
 
 
