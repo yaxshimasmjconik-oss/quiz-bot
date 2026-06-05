@@ -8,10 +8,16 @@ def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📝 Testni boshlash", callback_data="solve_quiz")
     )
     builder.row(
-        InlineKeyboardButton(text="➕ Yangi test yaratish", callback_data="create_quiz")
+        InlineKeyboardButton(text="➕ Yangi test yaratish", callback_data="create_quiz"),
+        InlineKeyboardButton(text="📋 Kategoriyalar", callback_data="categories"),
     )
     builder.row(
-        InlineKeyboardButton(text="📊 Mening natijalarim", callback_data="my_results")
+        InlineKeyboardButton(text="✏️ Tahrirlash", callback_data="edit_quiz"),
+        InlineKeyboardButton(text="📋 Nusxalash", callback_data="copy_quiz"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📊 Mening natijalarim", callback_data="my_results"),
+        InlineKeyboardButton(text="🏆 Reyting", callback_data="global_rating"),
     )
     if is_admin:
         builder.row(
