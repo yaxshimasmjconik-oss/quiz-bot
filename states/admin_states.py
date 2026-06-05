@@ -2,14 +2,29 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class CreateQuizSG(StatesGroup):
-    """Quiz yaratish uchun holatlar."""
-    waiting_title = State()          # Quiz nomini kutish
-    waiting_question = State()       # Savol matnini kutish
-    waiting_option = State()         # Javob variantini kutish
-    waiting_correct_choice = State() # To'g'ri javobni tanlashni kutish
-    confirm_next = State()           # Savol qo'shishni davom ettirishni tasdiqlash
+    waiting_title = State()
+    waiting_category = State()
+    waiting_question = State()
+    waiting_option = State()
+    waiting_correct_choice = State()
+    confirm_next = State()
 
 
 class DeleteQuizSG(StatesGroup):
-    """Quiz o'chirish uchun holatlar."""
     waiting_quiz_choice = State()
+
+
+class EditQuizSG(StatesGroup):
+    choosing_quiz = State()
+    choosing_action = State()
+    editing_title = State()
+    choosing_question = State()
+    editing_question = State()
+    choosing_option = State()
+    editing_option = State()
+    choosing_correct = State()
+
+
+class CopyQuizSG(StatesGroup):
+    choosing_quiz = State()
+    waiting_title = State()
